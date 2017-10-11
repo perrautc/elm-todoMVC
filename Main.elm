@@ -1,12 +1,11 @@
-module Main exposing (..)
+port module Main exposing (..)
 
 import Html exposing (..)
-import Html.Attributes exposing (..)
+import Html.Attributes exposing (class, autofocus, placeholder, classList, checked, href, rel, type_, value)
+import Json.Decode.Pipeline exposing (decode, required)
 import Html.Events exposing (on, keyCode, onInput, onCheck, onClick)
-import Json.Decode as Json
-
-
--- A Todo
+import Json.Decode as Decode
+import Json.Encode
 
 
 type alias Todo =
@@ -17,18 +16,10 @@ type alias Todo =
     }
 
 
-
--- The application can have various states of filters
-
-
 type FilterState
     = All
     | Active
     | Completed
-
-
-
--- The entire application state's model
 
 
 type alias Model =
@@ -39,45 +30,21 @@ type alias Model =
     }
 
 
-
--- The messages that can occur
-
-
 type Msg
-    = Add Todo
+    = Add
     | Complete Todo
-    | Uncomplete Todo
     | Delete Todo
     | UpdateField String
     | Filter FilterState
     | Clear
-
-
-newTodo : Todo
-newTodo =
-    { title = ""
-    , completed = False
-    , editing = False
-    , identifier = 0
-    }
-
-
-onEnter : Msg -> Attribute Msg
-onEnter msg =
-    let
-        isEnter code =
-            if code == 13 then
-                Json.succeed (Add newTodo)
-            else
-                Json.fail "not the right keycode"
-    in
-        on "keydown" (keyCode |> Json.andThen isEnter)
+    | SetModel Model
+    | NoOp
 
 
 initialModel : Model
 initialModel =
     { todos =
-        [ { title = "The First todo"
+        [ { title = "The first todo"
           , completed = False
           , editing = False
           , identifier = 1
@@ -89,15 +56,30 @@ initialModel =
     }
 
 
-update : Msg -> Model -> Model
+newTodo : Todo
+newTodo =
+    { title = ""
+    , completed = False
+    , editing = False
+    , identifier = 0
+    }
+
+
+update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
     case msg of
-        Add todo ->
-            { model
-                | todos = model.todo :: model.todos
-                , todo = { newTodo | identifier = model.nextIdentifier }
-                , nextIdentifier = model.nextIdentifier + 1
-            }
+        Add ->
+            let
+                newModel =
+                    { model
+                        | todos = model.todo :: model.todos
+                        , todo = { newTodo | identifier = model.nextIdentifier }
+                        , nextIdentifier = model.nextIdentifier + 1
+                    }
+            in
+                ( newModel
+                , sendToStorage newModel
+                )
 
         Complete todo ->
             let
@@ -106,31 +88,24 @@ update msg model =
                         { todo | completed = True }
                     else
                         thisTodo
-            in
-                { model
-                    | todos = List.map updateTodo model.todos
-                }
 
-        Uncomplete todo ->
-            let
-                updateTodo thisTodo =
-                    if thisTodo.identifier == todo.identifier then
-                        { todo | completed = False }
-                    else
-                        thisTodo
+                newModel =
+                    { model
+                        | todos = List.map updateTodo model.todos
+                    }
             in
-                { model
-                    | todos = List.map updateTodo model.todos
-                }
+                ( newModel
+                , sendToStorage newModel
+                )
 
         Delete todo ->
             let
-                deleteTodo t =
-                    t.identifier /= todo.identifier
+                newModel =
+                    { model | todos = List.filter (\mappedTodo -> todo.identifier /= mappedTodo.identifier) model.todos }
             in
-                { model
-                    | todos = List.filter deleteTodo model.todos
-                }
+                ( newModel
+                , sendToStorage newModel
+                )
 
         UpdateField str ->
             let
@@ -139,103 +114,88 @@ update msg model =
 
                 updatedTodo =
                     { todo | title = str }
-            in
-                { model | todo = updatedTodo }
 
-        -- { model | todo = { model.todo | title = str } }
+                newModel =
+                    { model | todo = updatedTodo }
+            in
+                ( newModel
+                , sendToStorage newModel
+                )
+
         Filter filterState ->
-            { model | filter = filterState }
+            let
+                newModel =
+                    { model | filter = filterState }
+            in
+                ( newModel
+                , sendToStorage newModel
+                )
 
         Clear ->
-            { model
-                | todos = List.filter (\todo -> todo.completed == False) model.todos
-            }
+            let
+                newModel =
+                    { model
+                        | todos = List.filter (\todo -> todo.completed == False) model.todos
+                    }
+            in
+                ( newModel
+                , sendToStorage newModel
+                )
+
+        SetModel newModel ->
+            ( newModel
+            , Cmd.none
+            )
+
+        NoOp ->
+            ( model
+            , Cmd.none
+            )
 
 
-todoHeader : Html Msg
-todoHeader =
-    header [ class "header" ]
-        [ h1 [] [ text "Todo App" ]
-        , input
-            [ class "new-todo"
-            , placeholder "what needs to be done?"
-            , autofocus True
-            , onEnter (Add newTodo)
-            , onInput UpdateField
+todoView : Todo -> Html Msg
+todoView todo =
+    li
+        [ classList
+            [ ( "completed", todo.completed ) ]
+        ]
+        [ div
+            [ class "view" ]
+            [ input
+                [ class "toggle"
+                , type_ "checkbox"
+                , checked todo.completed
+                , onCheck (\_ -> Complete todo)
+                ]
+                []
+            , label [] [ text todo.title ]
+            , button
+                [ class "destroy"
+                , onClick (Delete todo)
+                ]
+                []
             ]
-            []
         ]
 
 
-todoList : Model -> Html Msg
-todoList model =
-    section [ class "main" ]
-        [ ul [ class "todo-list" ]
-            (List.map todoItem (filteredTodos model))
-        ]
-
-
-todoItem : Todo -> Html Msg
-todoItem todo =
+onEnter : Msg -> Attribute Msg
+onEnter msg =
     let
-        handleComplete =
-            case todo.completed of
-                True ->
-                    (\_ -> Uncomplete todo)
-
-                False ->
-                    (\_ -> Complete todo)
+        isEnter code =
+            if code == 13 then
+                Decode.succeed msg
+            else
+                Decode.fail "not the right keycode"
     in
-        li [ classList [ ( "completed", todo.completed ) ] ]
-            [ div [ class "view" ]
-                [ input
-                    [ class "toggle"
-                    , type_ "checkbox"
-                    , checked todo.completed
-                    , onCheck handleComplete
-                    ]
-                    []
-                , label [] [ text todo.title ]
-                , button
-                    [ class "destroy"
-                    , onClick (Delete todo)
-                    ]
-                    []
-                ]
-            ]
-
-
-footer : Model -> Html Msg
-footer model =
-    div [ class "footer" ]
-        [ span [ class "todo-count" ]
-            [ strong []
-                [ model.todos
-                    |> List.filter (\todo -> todo.completed == False)
-                    |> List.length
-                    |> toString
-                    |> text
-                ]
-            , text " items left"
-            ]
-        , ul [ class "filters" ]
-            [ filterItemView model All
-            , filterItemView model Active
-            , filterItemView model Completed
-            ]
-        , button
-            [ class "clear-completed"
-            , onClick Clear
-            ]
-            [ text "Clear completed" ]
-        ]
+        on "keydown" (keyCode |> Decode.andThen isEnter)
 
 
 filterItemView : Model -> FilterState -> Html Msg
 filterItemView model filterState =
     li []
         [ a
-            [ classList [ ( "selected", (model.filter == filterState) ) ]
+            [ classList
+                [ ( "selected", (model.filter == filterState) ) ]
             , href "#"
             , onClick (Filter filterState)
             ]
@@ -263,27 +223,213 @@ filteredTodos model =
 view : Model -> Html Msg
 view model =
     div []
-        [ node "style" [ type_ "text/css" ] [ text styles ]
-        , section [ class "todoapp" ]
-            [ todoHeader
-            , todoList model
-            , footer model
+        [ node "style"
+            [ type_ "text/css" ]
+            [ text styles ]
+        , section
+            [ class "todoapp" ]
+            [ header
+                [ class "header" ]
+                [ h1 [] [ text "todos" ]
+                , input
+                    [ class "new-todo"
+                    , placeholder "What needs to be done?"
+
+                    -- We'll explicitly set the value to the model's todo's title
+                    , value model.todo.title
+                    , autofocus True
+                    , onEnter Add
+                    , onInput UpdateField
+                    ]
+                    []
+                ]
+            , section
+                [ class "main" ]
+                [ ul
+                    [ class "todo-list" ]
+                    (List.map todoView (filteredTodos model))
+                ]
+            , footer
+                [ class "footer" ]
+                [ span [ class "todo-count" ]
+                    [ strong [] [ text (toString (List.length (List.filter (\todo -> todo.completed == False) model.todos))) ]
+                    , text " items left"
+                    ]
+                , ul
+                    [ class "filters" ]
+                    [ filterItemView model All
+                    , filterItemView model Active
+                    , filterItemView model Completed
+                    ]
+                , button
+                    [ class "clear-completed"
+                    , onClick Clear
+                    ]
+                    [ text "Clear completed" ]
+                ]
             ]
         ]
 
 
 main : Program Never Model Msg
 main =
-    Html.beginnerProgram
-        { model = initialModel
-        , view = view
+    Html.program
+        { init = ( initialModel, Cmd.none )
         , update = update
+        , view = view
+        , subscriptions = subscriptions
         }
+
+
+subscriptions : Model -> Sub Msg
+subscriptions model =
+    storageInput mapStorageInput
+
+
+
+-- We'll define how to encode our Model to Json.Encode.Values
+
+
+encodeJson : Model -> Json.Encode.Value
+encodeJson model =
+    -- It's a json object with a list of fields
+    Json.Encode.object
+        -- The `todos` field is a list of encoded Todos, we'll define this encodeTodo function later
+        [ ( "todos", Json.Encode.list (List.map encodeTodo model.todos) )
+
+        -- The current todo is also going to go through encodeTodo
+        , ( "todo", encodeTodo model.todo )
+
+        -- The filter gets encoded with a custom function as well
+        , ( "filter", encodeFilterState model.filter )
+
+        -- And the next identifier is just an int
+        , ( "nextIdentifier", Json.Encode.int model.nextIdentifier )
+        ]
+
+
+
+-- We'll define how to encode a Todo
+
+
+encodeTodo : Todo -> Json.Encode.Value
+encodeTodo todo =
+    -- It's an object with a list of fields
+    Json.Encode.object
+        -- The title is a string
+        [ ( "title", Json.Encode.string todo.title )
+
+        -- completed is a bool
+        , ( "completed", Json.Encode.bool todo.completed )
+
+        -- editing is a bool
+        , ( "editing", Json.Encode.bool todo.editing )
+
+        -- identifier is an int
+        , ( "identifier", Json.Encode.int todo.identifier )
+        ]
+
+
+
+-- The FilterState encoder takes a FilterState and returns a Json.Encode.Value
+
+
+encodeFilterState : FilterState -> Json.Encode.Value
+encodeFilterState filterState =
+    -- We'll use toString to turn our FilterState into a string
+    Json.Encode.string (toString filterState)
+
+
+mapStorageInput : Decode.Value -> Msg
+mapStorageInput modelJson =
+    case (decodeModel modelJson) of
+        Ok model ->
+            SetModel model
+
+        Err errorMessage ->
+            let
+                _ =
+                    Debug.log "Error in mapStorageInput:" errorMessage
+            in
+                NoOp
+
+
+decodeModel : Decode.Value -> Result String Model
+decodeModel modelJson =
+    Decode.decodeValue modelDecoder modelJson
+
+
+modelDecoder : Decode.Decoder Model
+modelDecoder =
+    decode Model
+        |> required "todos" (Decode.list todoDecoder)
+        |> required "todo" todoDecoder
+        |> required "filter" (Decode.string |> Decode.map filterStateDecoder)
+        |> required "nextIdentifier" Decode.int
+
+
+todoDecoder : Decode.Decoder Todo
+todoDecoder =
+    decode Todo
+        |> required "title" Decode.string
+        |> required "completed" Decode.bool
+        |> required "editing" Decode.bool
+        |> required "identifier" Decode.int
+
+
+filterStateDecoder : String -> FilterState
+filterStateDecoder string =
+    case string of
+        "All" ->
+            All
+
+        "Active" ->
+            Active
+
+        "Completed" ->
+            Completed
+
+        _ ->
+            let
+                _ =
+                    Debug.log "filterStateDecoder" <|
+                        "Couldn't decode value "
+                            ++ string
+                            ++ " so defaulting to All."
+            in
+                All
+
+
+
+-- Sending to storage now just needs to encode the model to JSON before
+-- sending it out the port.
+
+
+sendToStorage : Model -> Cmd Msg
+sendToStorage model =
+    encodeJson model |> storage
+
+
+
+-- INPUT PORTS
+-- our input port gets Decode.Values into it
+
+
+port storageInput : (Decode.Value -> msg) -> Sub msg
+
+
+
+-- OUTPUT PORTS
+-- We have an outbound port of Json.Encode.Values now - notice we aren't dealing
+-- with them as raw string representations ever in our Elm code.  They're still
+-- typed.
+
+
+port storage : Json.Encode.Value -> Cmd msg
 
 
 styles : String
 styles =
-    -- Styles from github
     """
     html,
     body {
@@ -399,32 +545,28 @@ styles =
         border-top: 1px solid #e6e6e6;
     }
 
-    .toggle-all {
-        text-align: center;
-        border: none; /* Mobile Safari */
-        opacity: 0;
-        position: absolute;
+    label[for='toggle-all'] {
+        display: none;
     }
 
-    .toggle-all + label {
+    .toggle-all {
+        position: absolute;
+        top: -55px;
+        left: -12px;
         width: 60px;
         height: 34px;
-        font-size: 0;
-        position: absolute;
-        top: -52px;
-        left: -13px;
-        -webkit-transform: rotate(90deg);
-        transform: rotate(90deg);
+        text-align: center;
+        border: none; /* Mobile Safari */
     }
 
-    .toggle-all + label:before {
+    .toggle-all:before {
         content: '❯';
         font-size: 22px;
         color: #e6e6e6;
         padding: 10px 27px 10px 27px;
     }
 
-    .toggle-all:checked + label:before {
+    .toggle-all:checked:before {
         color: #737373;
     }
 
@@ -474,27 +616,18 @@ styles =
         appearance: none;
     }
 
-    .todo-list li .toggle {
-        opacity: 0;
+    .todo-list li .toggle:after {
+        content: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="-10 -18 100 135"><circle cx="50" cy="50" r="50" fill="none" stroke="#ededed" stroke-width="3"/></svg>');
     }
 
-    .todo-list li .toggle + label {
-        /*
-            Firefox requires `#` to be escaped - https://bugzilla.mozilla.org/show_bug.cgi?id=922433
-            IE and Edge requires *everything* to be escaped to render, so we do that instead of just the `#` - https://developer.microsoft.com/en-us/microsoft-edge/platform/issues/7157459/
-        */
-        background-image: url('data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%20width%3D%2240%22%20height%3D%2240%22%20viewBox%3D%22-10%20-18%20100%20135%22%3E%3Ccircle%20cx%3D%2250%22%20cy%3D%2250%22%20r%3D%2250%22%20fill%3D%22none%22%20stroke%3D%22%23ededed%22%20stroke-width%3D%223%22/%3E%3C/svg%3E');
-        background-repeat: no-repeat;
-        background-position: center left;
-    }
-
-    .todo-list li .toggle:checked + label {
-        background-image: url('data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%20width%3D%2240%22%20height%3D%2240%22%20viewBox%3D%22-10%20-18%20100%20135%22%3E%3Ccircle%20cx%3D%2250%22%20cy%3D%2250%22%20r%3D%2250%22%20fill%3D%22none%22%20stroke%3D%22%23bddad5%22%20stroke-width%3D%223%22/%3E%3Cpath%20fill%3D%22%235dc2af%22%20d%3D%22M72%2025L42%2071%2027%2056l-4%204%2020%2020%2034-52z%22/%3E%3C/svg%3E');
+    .todo-list li .toggle:checked:after {
+        content: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="-10 -18 100 135"><circle cx="50" cy="50" r="50" fill="none" stroke="#bddad5" stroke-width="3"/><path fill="#5dc2af" d="M72 25L42 71 27 56l-4 4 20 20 34-52z"/></svg>');
     }
 
     .todo-list li label {
         word-break: break-all;
-        padding: 15px 15px 15px 60px;
+        padding: 15px 60px 15px 15px;
+        margin-left: 45px;
         display: block;
         line-height: 1.2;
         transition: color 0.4s;
@@ -525,7 +658,7 @@ styles =
     }
 
     .todo-list li .destroy:after {
-        content: '×';
+        content: 'x';
     }
 
     .todo-list li:hover .destroy {
@@ -650,6 +783,13 @@ styles =
         .todo-list li .toggle {
             height: 40px;
         }
+
+        .toggle-all {
+            -webkit-transform: rotate(90deg);
+            transform: rotate(90deg);
+            -webkit-appearance: none;
+            appearance: none;
+        }
     }
 
     @media (max-width: 430px) {
@@ -661,4 +801,4 @@ styles =
             bottom: 10px;
         }
     }
-    """
+  """
